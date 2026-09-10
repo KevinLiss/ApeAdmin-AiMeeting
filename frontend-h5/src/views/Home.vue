@@ -1,54 +1,73 @@
 <template>
   <div class="page home-page">
     <div class="hero">
+      <div class="logo-badge">
+        <el-icon :size="22" color="#fff"><Microphone /></el-icon>
+      </div>
       <h1>AI 会议</h1>
-      <p class="text-muted">输入会议编号进入会议，支持语音录音、自动转写与 AI 纪要</p>
+      <p class="text-muted">语音录音 · 自动转写 · AI 纪要</p>
     </div>
 
-    <!-- 无感登录：输入会议编号 -->
-    <el-card shadow="never">
-      <template #header>进入会议</template>
-      <el-form @submit.prevent="handleLookup">
-        <el-form-item>
-          <el-input
-            v-model="code"
-            size="large"
-            placeholder="输入 8 位会议编号"
-            maxlength="32"
-            style="text-transform: uppercase"
-            @keyup.enter="handleLookup"
-          />
-        </el-form-item>
-        <el-button type="primary" size="large" style="width: 100%" :loading="looking" @click="handleLookup">
-          进入会议
-        </el-button>
-      </el-form>
-      <div class="tip text-muted">无账号即可使用，输入会议编号自动进入</div>
-    </el-card>
+    <!-- 单一入口面板：进入会议 / 创建会议 模式切换 -->
+    <div class="panel">
+      <transition name="fade-slide" mode="out-in">
+        <!-- 进入会议 -->
+        <div v-if="mode === 'join'" key="join" class="panel-body">
+          <div class="panel-head">
+            <h2>进入会议</h2>
+            <p>输入会议编号，无需账号即可加入</p>
+          </div>
+          <el-form @submit.prevent="handleLookup">
+            <el-input
+              v-model="code"
+              size="large"
+              class="code-input"
+              placeholder="请输入 8 位会议编号"
+              maxlength="32"
+              style="text-transform: uppercase"
+              @keyup.enter="handleLookup"
+            />
+            <el-button type="primary" size="large" class="primary-btn" :loading="looking" @click="handleLookup">
+              进入会议
+            </el-button>
+          </el-form>
+          <div class="switch-row">
+            <span class="text-muted">还没有会议？</span>
+            <button class="link-btn" type="button" @click="mode = 'create'">创建会议</button>
+          </div>
+        </div>
 
-    <!-- 创建会议 -->
-    <el-card shadow="never">
-      <template #header>创建会议</template>
-      <el-form :model="createForm" label-position="top">
-        <el-form-item label="会议名称" required>
-          <el-input v-model="createForm.title" placeholder="例如：产品周例会" maxlength="200" />
-        </el-form-item>
-        <el-form-item label="参会人（可选）">
-          <el-input v-model="createForm.participants" placeholder="多个参会人用逗号分隔" />
-        </el-form-item>
-        <el-form-item label="开始时间（可选）">
-          <el-date-picker
-            v-model="createForm.start_time"
-            type="datetime"
-            placeholder="选择时间"
-            style="width: 100%"
-          />
-        </el-form-item>
-        <el-button type="primary" plain size="large" style="width: 100%" :loading="creating" @click="handleCreate">
-          创建会议并进入
-        </el-button>
-      </el-form>
-    </el-card>
+        <!-- 创建会议 -->
+        <div v-else key="create" class="panel-body">
+          <div class="panel-head">
+            <h2>创建会议</h2>
+            <p>创建后立即进入，即可开始录音</p>
+          </div>
+          <el-form :model="createForm" label-position="top">
+            <el-form-item label="会议名称" required>
+              <el-input v-model="createForm.title" placeholder="例如：产品周例会" maxlength="200" />
+            </el-form-item>
+            <el-form-item label="参会人（可选）">
+              <el-input v-model="createForm.participants" placeholder="多个参会人用逗号分隔" />
+            </el-form-item>
+            <el-form-item label="开始时间（可选）">
+              <el-date-picker
+                v-model="createForm.start_time"
+                type="datetime"
+                placeholder="选择时间"
+                style="width: 100%"
+              />
+            </el-form-item>
+            <el-button type="primary" size="large" class="primary-btn" :loading="creating" @click="handleCreate">
+              创建并进入会议
+            </el-button>
+          </el-form>
+          <div class="switch-row">
+            <button class="link-btn" type="button" @click="mode = 'join'">← 返回输入会议编号</button>
+          </div>
+        </div>
+      </transition>
+    </div>
 
     <!-- 录音功能提示 -->
     <el-alert
@@ -56,7 +75,7 @@
       :closable="false"
       show-icon
       title="录音说明：仅录制麦克风声音；iOS Safari 无法录制系统播放的声音。切到后台会中断录音。"
-      style="margin-top: 4px"
+      class="rec-tip"
     />
   </div>
 </template>
@@ -65,9 +84,13 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { Microphone } from '@element-plus/icons-vue'
 import { lookupMeeting, createMeeting, getDeviceId } from '@/api/aimeeting'
 
 const router = useRouter()
+
+/** 当前面板模式：join=进入会议 / create=创建会议 */
+const mode = ref<'join' | 'create'>('join')
 const code = ref('')
 const looking = ref(false)
 const creating = ref(false)
@@ -122,23 +145,134 @@ async function handleCreate() {
 </script>
 
 <style scoped>
+.home-page {
+  display: flex;
+  flex-direction: column;
+  padding-top: 8px;
+}
+
+/* ── 品牌区 ─────────────────────────── */
 .hero {
   text-align: center;
-  padding: 24px 0 8px;
+  padding: 24px 0 28px;
+}
+.logo-badge {
+  width: 52px;
+  height: 52px;
+  margin: 0 auto 14px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  box-shadow: 0 8px 20px rgba(79, 70, 229, 0.35);
 }
 .hero h1 {
-  font-size: 28px;
+  font-size: 26px;
   font-weight: 700;
-  background: linear-gradient(135deg, #4f46e5, #7c3aed);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
+  letter-spacing: 1px;
   margin-bottom: 6px;
 }
-.tip {
-  margin-top: 10px;
-  font-size: 12px;
-  color: #c0c4cc;
+.hero .text-muted {
+  font-size: 13px;
+}
+
+/* ── 主面板 ── */
+.panel {
+  background: #fff;
+  border-radius: 20px;
+  padding: 26px 20px 20px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
+  margin-bottom: 16px;
+}
+.panel-head {
+  margin-bottom: 18px;
+}
+.panel-head h2 {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.panel-head p {
+  font-size: 13px;
+  color: #909399;
+}
+
+.code-input :deep(.el-input__wrapper) {
+  border-radius: 12px;
+  padding: 4px 16px;
+  min-height: 52px;
+  font-size: 16px;
+  letter-spacing: 2px;
+}
+.code-input :deep(.el-input__inner) {
+  font-weight: 600;
   text-align: center;
+}
+
+/* 主按钮：渐变品牌色 */
+.primary-btn {
+  width: 100%;
+  min-height: 48px;
+  margin-top: 16px;
+  border: none;
+  border-radius: 12px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  box-shadow: 0 6px 16px rgba(79, 70, 229, 0.3);
+}
+.primary-btn:hover,
+.primary-btn:focus {
+  background: linear-gradient(135deg, #4338ca, #6d28d9);
+}
+
+/* 创建模式表单 */
+.panel-body :deep(.el-form-item__label) {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+/* 模式切换 */
+.switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-top: 18px;
+  font-size: 13px;
+}
+.link-btn {
+  border: none;
+  background: none;
+  padding: 4px 6px;
+  color: #4f46e5;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.link-btn:active {
+  opacity: 0.7;
+}
+
+/* 模式切换过渡动画 */
+.fade-slide-enter-active,
+.fade-slide-leave-active {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+.fade-slide-enter-from {
+  opacity: 0;
+  transform: translateY(10px);
+}
+.fade-slide-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
+.rec-tip {
+  border-radius: 10px;
+  font-size: 12px;
 }
 </style>
