@@ -25,14 +25,21 @@ async def _list_meetings(status: str = "", page: int = 1, page_size: int = 10) -
     page = max(1, page)
     page_size = min(50, max(1, page_size))
     async with SessionLocal() as db:
-        from src.plugins.builtin.aimeeting.models import MeetingStatus
+        from sqlalchemy import func
 
-        stmt = select(AimeetingMeeting).where(AimeetingMeeting.is_deleted == False)  # noqa: E712
+        conditions = [AimeetingMeeting.is_deleted == False]  # noqa: E712
         if status:
-            stmt = stmt.where(AimeetingMeeting.status == status)
-        count_stmt = stmt
-        total = len((await db.execute(count_stmt)).scalars().all())
-        stmt = stmt.order_by(AimeetingMeeting.id.desc()).offset((page - 1) * page_size).limit(page_size)
+            conditions.append(AimeetingMeeting.status == status)
+        total = (
+            await db.execute(select(func.count(AimeetingMeeting.id)).where(*conditions))
+        ).scalar() or 0
+        stmt = (
+            select(AimeetingMeeting)
+            .where(*conditions)
+            .order_by(AimeetingMeeting.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
         meetings = (await db.execute(stmt)).scalars().all()
 
     return json.dumps({
@@ -41,11 +48,12 @@ async def _list_meetings(status: str = "", page: int = 1, page_size: int = 10) -
             {
                 "id": m.id,
                 "title": m.title,
-                "meeting_type": m.meeting_type,
+                "meeting_code": m.meeting_code,
                 "status": m.status,
-                "organizer": m.organizer,
                 "start_time": m.start_time.strftime("%Y-%m-%d %H:%M") if m.start_time else None,
                 "participants": m.participants,
+                "transcript_status": m.transcript_status,
+                "diarization_status": m.diarization_status,
             }
             for m in meetings
         ],
@@ -53,7 +61,7 @@ async def _list_meetings(status: str = "", page: int = 1, page_size: int = 10) -
 
 
 async def _list_records(meeting_id: int) -> str:
-    """列出某次会议的实时记录（按时间线排序）。
+    """列出某次会议的全部录音转写记录（按会议内偏移排序）。
 
     Args:
         meeting_id: 会议ID。
@@ -65,7 +73,7 @@ async def _list_records(meeting_id: int) -> str:
                 AimeetingMinuteRecord.meeting_id == meeting_id,
                 AimeetingMinuteRecord.is_deleted == False,  # noqa: E712
             )
-            .order_by(AimeetingMinuteRecord.record_time.asc(), AimeetingMinuteRecord.id.asc())
+            .order_by(AimeetingMinuteRecord.offset_sec.asc(), AimeetingMinuteRecord.id.asc())
         )
         records = (await db.execute(stmt)).scalars().all()
 
@@ -75,10 +83,11 @@ async def _list_records(meeting_id: int) -> str:
         "items": [
             {
                 "id": r.id,
-                "speaker": r.speaker,
-                "content": r.content,
-                "record_time": r.record_time.strftime("%Y-%m-%d %H:%M:%S") if r.record_time else None,
-                "creator_name": r.creator_name,
+                "offset_sec": r.offset_sec,
+                "audio_duration": r.audio_duration,
+                "transcript_status": r.transcript_status,
+                "transcript": r.transcript,
+                "created_at": r.created_at.strftime("%Y-%m-%d %H:%M:%S") if r.created_at else None,
             }
             for r in records
         ],

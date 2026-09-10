@@ -129,6 +129,8 @@ export function useRecorder() {
   let sliceTimer: number | null = null
   let onSlice: ((blob: Blob, offsetSec: number, durationSec: number) => void) | null = null
   let sliceUploadBusy = false
+  // 待上传队列：上一片还在传时新片入队，传完自动 flush（避免并发上传互相静默丢弃）
+  let pendingSlices: Array<{ blob: Blob; offsetSec: number; durationSec: number }> = []
   let sliceSeq = 0 // 分片序号（从 1 开始）
   let currentSliceOffset = 0 // 当前分片的起始会议偏移（秒），上传时作为 offset_sec
 
@@ -182,8 +184,8 @@ export function useRecorder() {
         try {
           const blob = await stopCurrentSlice()
           if (blob && blob.size > 0 && onSlice) {
-            const offsetSec = currentSliceOffset
-            await uploadSlice(blob, offsetSec)
+            // 停止时固化时长（排队上传不会因 elapsed 继续增长而虚增）
+            uploadSlice(blob, currentSliceOffset, Math.max(Math.floor(elapsed.value) - currentSliceOffset, 0))
           }
           // 启动下一片（无论上传是否成功都继续录）
           if (recording.value && !paused.value) {
@@ -275,14 +277,26 @@ export function useRecorder() {
     })
   }
 
-  /** 串行上传分片，避免并发（失败静默，靠轮询兜底） */
-  async function uploadSlice(blob: Blob, offsetSec: number) {
+  /** 串行上传分片：忙时入队，空闲后按序 flush（失败静默，靠轮询/结束上传兜底）。
+   *  durationSec 由调用方在分片停止那一刻固化，避免排队期间 elapsed 增长导致时长虚增。 */
+  function uploadSlice(blob: Blob, offsetSec: number, durationSec: number) {
+    pendingSlices.push({ blob, offsetSec, durationSec })
+    void flushPendingSlices()
+  }
+
+  /** 按序上传队列中全部分片（结束会议前应 await 它，确保所有记录落库） */
+  async function flushPendingSlices() {
     if (sliceUploadBusy) return
     sliceUploadBusy = true
     try {
-      await onSlice?.(blob, offsetSec, Math.floor(elapsed.value))
-    } catch {
-      // 上传失败不打断录音，等待下一次分片或结束上传兜底
+      while (pendingSlices.length > 0) {
+        const item = pendingSlices.shift()!
+        try {
+          await onSlice?.(item.blob, item.offsetSec, item.durationSec)
+        } catch {
+          // 上传失败不打断录音，等待下一次分片或结束上传兜底
+        }
+      }
     } finally {
       sliceUploadBusy = false
     }
@@ -318,8 +332,7 @@ export function useRecorder() {
           try {
             const blob = await stopCurrentSlice()
             if (blob && blob.size > 0 && onSlice) {
-              const offsetSec = currentSliceOffset
-              await uploadSlice(blob, offsetSec)
+              uploadSlice(blob, currentSliceOffset, Math.max(Math.floor(elapsed.value) - currentSliceOffset, 0))
             }
             if (recording.value && !paused.value) {
               currentSliceOffset = elapsed.value
@@ -380,9 +393,17 @@ export function useRecorder() {
     return currentSliceOffset
   }
 
+  /** 等待队列中分片全部上传完（结束会议前调用，避免最后一片丢失） */
+  async function waitForUploads() {
+    while (sliceUploadBusy || pendingSlices.length > 0) {
+      await new Promise((r) => setTimeout(r, 100))
+    }
+  }
+
   return {
     supported, recording, paused, elapsed, error,
     start, pause, resume, stop, fmtDuration, setSliceHandler, getCurrentOffset,
+    waitForUploads,
     permission, requesting, checkPermission, requestPermission,
   }
 }

@@ -51,10 +51,8 @@ from src.plugins.builtin.aimeeting.services import (
     finalize_meeting,
     generate_meeting_code,
     generate_minutes,
-    merge_transcript_to_meeting,
     speaker_code,
     transcribe_record_async,
-    wait_for_records_done,
 )
 
 router = APIRouter(prefix="/aimeeting", tags=["AI 会议助手"])
@@ -112,9 +110,9 @@ async def _check_meeting(db: AsyncSession, meeting: AimeetingMeeting, device_id:
 
 
 def _sanitize_client_meeting(data: dict) -> dict:
-    """用户端只暴露必要字段。"""
+    """用户端只暴露必要字段（transcript_json 由 client_get_meeting 保留，
+    实时对话流数据源，勿在此处删除）。"""
     data.pop("transcript_text", None)
-    data.pop("transcript_json", None)
     data.pop("device_id", None)
     data.pop("creator_id", None)
     data.pop("creator_name", None)
@@ -291,13 +289,13 @@ async def client_finish_meeting(
 ):
     """用户端：结束会议。
 
-    文字记录模式：直接结束存档（后台可查看会议记录）。
-    若有录音：等待在途转写完成 → 合并 → 触发会后链路（说话人分离 + AI 纪要）。
+    立即返回，不做任何长等待：转写/分离/纪要全部在后台 finalize_meeting 中
+    按序执行（含等待在途转写，最长 90 秒），前端轮询 transcript 接口看进度。
     """
     meeting = await _get_meeting_or_404(db, meeting_id)
     await _check_device(meeting, body.device_id)
 
-    # 是否存在录音记录（文字模式没有录音则跳过语音链路）
+    # 是否存在录音记录（无录音则跳过语音链路）
     has_records = (
         await db.execute(
             select(AimeetingMinuteRecord.id)
@@ -309,24 +307,19 @@ async def client_finish_meeting(
         )
     ).scalars().first()
 
-    if has_records:
-        # 等待在途转写完成（最多 30 秒）
-        done = await wait_for_records_done(db, meeting, timeout=30.0)
-        # 合并转写（兼容部分场景直接落库）
-        await merge_transcript_to_meeting(db, meeting)
-        # 会后链路放后台任务（说话人分离 + AI 纪要可能耗时较长）
-        asyncio.ensure_future(finalize_meeting(meeting.id))
-    else:
-        done = True
-
     meeting.status = MeetingStatus.ENDED
     meeting.actual_end = meeting.actual_end or _now()
-    meeting.audio_duration = meeting.audio_duration or 0
+    if has_records:
+        # 会后链路放后台任务：等转写完 → 合并 → 说话人分离 → AI 纪要
+        # （finalize_meeting 内部自带转写等待与状态回写，接口立即返回不阻塞）
+        asyncio.ensure_future(finalize_meeting(meeting.id))
+    else:
+        meeting.audio_duration = meeting.audio_duration or 0
     await db.commit()
     await db.refresh(meeting)
 
     return success_response(
-        data={"status": meeting.status, "transcripts_done": done},
+        data={"status": meeting.status, "transcripts_done": True if not has_records else None},
         msg="会议已结束" + ("" if has_records else "，会议记录已存档"),
     )
 
@@ -378,7 +371,7 @@ async def client_get_meeting(
     ).scalar() or 0
 
     data = MeetingOut.model_validate(meeting).model_dump(mode="json")
-    # 用户端保留 transcript_json（实时对话流数据源）但去掉完整纯文本冗余
+    # 用户端保留 transcript_json（实时对话流数据源），去掉完整纯文本等冗余字段
     data["transcript_json"] = meeting.transcript_json or "[]"
     data["minutes"] = (
         MinutesOut.model_validate(minutes_row).model_dump(mode="json")
@@ -391,8 +384,6 @@ async def client_get_meeting(
     data["processing_count"] = processing_count
     data["failed_count"] = failed_count
     _sanitize_client_meeting(data)
-    # transcript_json 需要保留（sanitizer 只删 transcript_text）
-    data.pop("transcript_text", None)
     return success_response(data=data)
 
 
@@ -496,8 +487,17 @@ async def list_meetings(
             | (AimeetingMeeting.meeting_code.ilike(f"%{keyword}%"))
         )
 
-    count_stmt = stmt
-    total = len((await db.execute(count_stmt)).scalars().all())
+    count_stmt = select(func.count(AimeetingMeeting.id)).where(
+        AimeetingMeeting.is_deleted == False  # noqa: E712
+    )
+    if status:
+        count_stmt = count_stmt.where(AimeetingMeeting.status == status)
+    if keyword:
+        count_stmt = count_stmt.where(
+            (AimeetingMeeting.title.ilike(f"%{keyword}%"))
+            | (AimeetingMeeting.meeting_code.ilike(f"%{keyword}%"))
+        )
+    total = (await db.execute(count_stmt)).scalar() or 0
 
     stmt = (
         stmt.order_by(AimeetingMeeting.start_time.desc().nullslast(), AimeetingMeeting.id.desc())
@@ -559,16 +559,14 @@ async def get_meeting(
 ):
     """管理端：查询单个会议详情（含记录条数与纪要状态）。"""
     meeting = await _get_meeting_or_404(db, meeting_id)
-    record_count = len(
-        (
-            await db.execute(
-                select(AimeetingMinuteRecord).where(
-                    AimeetingMinuteRecord.meeting_id == meeting.id,
-                    AimeetingMinuteRecord.is_deleted == False,  # noqa: E712
-                )
+    record_count = (
+        await db.execute(
+            select(func.count(AimeetingMinuteRecord.id)).where(
+                AimeetingMinuteRecord.meeting_id == meeting.id,
+                AimeetingMinuteRecord.is_deleted == False,  # noqa: E712
             )
-        ).scalars().all()
-    )
+        )
+    ).scalar() or 0
     minutes_row = (
         await db.execute(
             select(AimeetingMinutes).where(AimeetingMinutes.meeting_id == meeting.id)

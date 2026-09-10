@@ -242,9 +242,9 @@ function speakerColor(no: number) {
   return speakerColors[(no - 1) % speakerColors.length]
 }
 function avatarText(seg: any) {
-  // 显示发言者编号首字母（A001→A）
+  // 显示发言者编号首字母（发言者A001→A）；中文名取首字
   const name = seg.speaker_name || ''
-  const m = /^([A-Z])\d+/.exec(name)
+  const m = /(?:^|[^A-Z])([A-Z])\d{3}/.exec(name)
   if (m) return m[1]
   return name ? name.charAt(0) : '?'
 }
@@ -314,13 +314,23 @@ async function handleAuth() {
   if (ok) ElMessage.success('麦克风已就绪，可以开始会议了')
 }
 
-/** 正式开始会议：注册切片上传 + 启动录音 + 开始轮询 */
+/** 正式开始会议：先确认麦克风可用再调 start 接口，失败不会让会议卡在 in_progress */
 async function handleStart() {
   starting.value = true
   try {
-    // 1. 先调后端 start：状态流转 scheduled → in_progress（增量声纹分离依赖此状态）
-    await startMeeting(meetingId, deviceId)
-    // 2. 注册分片上传回调：每次自动切片上传一段
+    // 1. 先验证麦克风可开（避免 startMeeting 成功但录音失败，会议卡 in_progress）
+    const ok = await recorder.start()
+    if (!ok) return
+    // 2. 再调后端 start：状态流转 scheduled → in_progress（增量声纹分离依赖此状态）
+    try {
+      await startMeeting(meetingId, deviceId)
+    } catch (e: any) {
+      // start 接口失败：停录音回滚，避免后续上传被拒
+      await recorder.stop()
+      ElMessage.error('会议启动失败：' + (e.message || e))
+      return
+    }
+    // 3. 注册分片上传回调：每次自动切片上传一段
     recorder.setSliceHandler(async (blob, offsetSec, durationSec) => {
       try {
         await uploadAudio(meetingId, deviceId, blob, durationSec, offsetSec)
@@ -328,29 +338,28 @@ async function handleStart() {
         ElMessage.error('切片上传失败：' + (e.message || e))
       }
     })
-    const ok = await recorder.start()
-    if (ok) {
-      ElMessage.success('会议已开始，语音实时转写中')
-      startPolling()
-      await refresh()
-    }
+    ElMessage.success('会议已开始，语音实时转写中')
+    startPolling()
+    await refresh()
   } finally {
     starting.value = false
   }
 }
 
-/** 结束会议：停止录音 → 上传最后一段 → 触发存档 */
+/** 结束会议：停止录音 → 上传残片 → 等队列清空 → 触发存档 */
 async function handleFinish() {
   finishing.value = true
   try {
-    const duration = recElapsed.value
     const offset = recorder.getCurrentOffset()
     const blob = await recorder.stop()
     if (blob.size > 0) {
-      await uploadAudio(meetingId, deviceId, blob, duration - offset, offset)
+      // 残片时长 = 结束时已录总时长 - 残片起始偏移（后端拿 duration 建立时间轴）
+      await uploadAudio(meetingId, deviceId, blob, Math.max(recorder.elapsed.value - offset, 0), offset)
     }
+    // 确保之前排队的分片全部落库后再 finish（否则在途分片会被 finalize 漏掉）
+    await recorder.waitForUploads()
     const data: any = await finishMeeting(meetingId, deviceId)
-    minutes.value = data
+    minutes.value = data?.minutes ?? data ?? null
     ElMessage.success('会议已结束，记录已存档')
     await refresh()
     stopPolling()
@@ -417,7 +426,15 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   stopPolling()
-  if (recRecording.value) recorder.stop()
+  if (recRecording.value) {
+    // 离开页面：上传残片后停录音（fire-and-forget，页面卸载后仍尽量保存）
+    const offset = recorder.getCurrentOffset()
+    recorder.stop().then((blob) => {
+      if (blob.size > 0) {
+        uploadAudio(meetingId, deviceId, blob, Math.max(recorder.elapsed.value - offset, 0), offset).catch(() => {})
+      }
+    })
+  }
 })
 </script>
 
