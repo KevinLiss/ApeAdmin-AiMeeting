@@ -47,7 +47,7 @@ class AimeetingMeeting(IDMixin, TimestampMixin, Base):
 
     __tablename__ = "aimeeting_meetings"
 
-    # 会议基本信息（用户端创建时填写）
+    # 会议基本信息（用户端创建时填写；留空则按时间自动命名）
     title: Mapped[str] = mapped_column(String(200), nullable=False, comment="会议标题")
     # 会议编号（用户输入作为凭证查询会议）
     meeting_code: Mapped[str] = mapped_column(String(32), nullable=False, unique=True, index=True, comment="会议编号")
@@ -79,6 +79,13 @@ class AimeetingMeeting(IDMixin, TimestampMixin, Base):
     transcript_status: Mapped[str] = mapped_column(
         String(20), default=TranscriptStatus.PENDING, comment="转写状态"
     )
+    # 结构化转写（句级 JSON：[{start,end,text,speaker}]），实时对话流渲染与说话人对齐的数据源
+    transcript_json: Mapped[str] = mapped_column(Text, default="", comment="句级结构化转写（JSON 数组）")
+
+    # 说话人分离状态：none=未分离 / pending=分离中 / success=完成 / failed=失败
+    diarization_status: Mapped[str] = mapped_column(
+        String(20), default="none", comment="说话人分离状态"
+    )
 
     # 创建人（后台管理创建/用户端创建时记录）
     creator_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0, index=True, comment="创建人ID")
@@ -94,17 +101,25 @@ class AimeetingMinuteRecord(IDMixin, TimestampMixin, Base):
     """录音转写记录。
 
     表名：``aimeeting_records``
-    一次会议可上传多段录音（支持暂停续录），每段独立转写，最终合并为会议完整转写文本。
+    一次会议可上传多段录音（15 秒准实时切片 + 手动分段），每段独立转写，
+    携带会议内时间偏移，最终合并为句级结构化转写（transcript_json）。
+
+    ⚠️ 前端切片边界可能切断句子：whisper 对每段独立转写，句首半个字/句尾重复
+    属正常现象，由 merge 环节做轻量去重。
     """
 
     __tablename__ = "aimeeting_records"
 
     meeting_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True, comment="所属会议ID")
+    # 本段录音在会议内的偏移（秒，实时切片 = 已录时长累计）
+    offset_sec: Mapped[int] = mapped_column(Integer, default=0, comment="本段在会议内的时间偏移（秒）")
     # 录音文件
     audio_path: Mapped[str] = mapped_column(String(500), default="", comment="录音文件路径")
     audio_duration: Mapped[int] = mapped_column(Integer, default=0, comment="录音时长（秒）")
     # 转写
     transcript: Mapped[str] = mapped_column(Text, default="", comment="本段转写文本")
+    # 句级结构化转写（JSON：[{start,end,text}]，start/end 为会议内绝对时间）
+    segments_json: Mapped[str] = mapped_column(Text, default="", comment="句级转写片段（JSON）")
     transcript_status: Mapped[str] = mapped_column(
         String(20), default=TranscriptStatus.PENDING, comment="本段转写状态"
     )
@@ -113,6 +128,23 @@ class AimeetingMinuteRecord(IDMixin, TimestampMixin, Base):
     device_id: Mapped[str] = mapped_column(String(200), default="", index=True, comment="设备标识")
     creator_id: Mapped[int] = mapped_column(Integer, nullable=False, default=0, comment="上传人ID")
     creator_name: Mapped[str] = mapped_column(String(100), default="", comment="上传人名称")
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="软删除")
+
+
+class AimeetingSpeaker(IDMixin, TimestampMixin, Base):
+    """会议说话人（声纹聚类出的虚拟身份，名称可编辑）。
+
+    表名：``aimeeting_speakers``
+    说话人分离完成后，按聚类编号生成「说话人 1/2/3」，用户可改为真实姓名。
+    """
+
+    __tablename__ = "aimeeting_speakers"
+
+    meeting_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True, comment="所属会议ID")
+    speaker_no: Mapped[int] = mapped_column(Integer, nullable=False, comment="说话人聚类编号（1 起）")
+    display_name: Mapped[str] = mapped_column(String(100), default="", comment="显示名称（可编辑，默认「说话人 N」）")
+    # 说话时间统计（秒），由分离结果聚合
+    total_speak_sec: Mapped[int] = mapped_column(Integer, default=0, comment="累计说话时长（秒）")
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="软删除")
 
 

@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 # ── 会议 ────────────────────────────────────────────────────────────────
 
 class MeetingCreate(BaseModel):
-    """创建会议（用户端填写，简化）。"""
-    title: str = Field(..., min_length=1, max_length=200, description="会议标题")
+    """创建会议（用户端填写，极简：名称可选留空自动命名）。"""
+    title: str = Field(default="", max_length=200, description="会议标题（留空则按创建时间自动命名）")
     start_time: Optional[datetime] = Field(default=None, description="会议开始时间")
     participants: str = Field(default="", description="参会人（逗号分隔）")
 
@@ -19,6 +19,17 @@ class MeetingUpdate(BaseModel):
     title: Optional[str] = Field(default=None, min_length=1, max_length=200)
     participants: Optional[str] = None
     start_time: Optional[datetime] = None
+
+
+class MeetingRename(BaseModel):
+    """用户端修改会议名称（全程可改）。"""
+    title: str = Field(..., min_length=1, max_length=200, description="新会议名称")
+    device_id: str = Field(..., min_length=8, max_length=200, description="设备标识")
+
+
+class SpeakerUpdate(BaseModel):
+    """修改说话人显示名称。"""
+    display_name: str = Field(..., min_length=1, max_length=100, description="新显示名称")
 
 
 class MeetingStatusUpdate(BaseModel):
@@ -43,6 +54,7 @@ class MeetingOut(BaseModel):
     audio_duration: int
     transcript_text: str
     transcript_status: str
+    diarization_status: str
     device_id: str
     creator_id: int
     creator_name: str
@@ -69,6 +81,7 @@ class AudioUpload(BaseModel):
     """录音文件上传（multipart 中附带元数据）。"""
     device_id: str = Field(..., min_length=8, max_length=200, description="设备标识")
     duration: int = Field(default=0, ge=0, description="录音时长（秒）")
+    offset_sec: int = Field(default=0, ge=0, description="本段在会议内的时间偏移（秒，实时切片累计）")
 
 
 class RecordOut(BaseModel):
@@ -77,11 +90,25 @@ class RecordOut(BaseModel):
 
     id: int
     meeting_id: int
+    offset_sec: int
     audio_path: str
     audio_duration: int
     transcript: str
+    segments_json: str
     transcript_status: str
     error: str
+    created_at: datetime
+
+
+class SpeakerOut(BaseModel):
+    """说话人响应。"""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    meeting_id: int
+    speaker_no: int
+    display_name: str
+    total_speak_sec: int
     created_at: datetime
 
 

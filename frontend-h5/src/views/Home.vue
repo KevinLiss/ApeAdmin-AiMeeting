@@ -37,8 +37,12 @@
         <div v-else key="create" class="panel-body">
           <h2 class="panel-title">创建会议</h2>
           <el-form :model="createForm" label-position="top" @submit.prevent="handleCreate">
-            <el-form-item label="会议名称" required>
-              <el-input v-model="createForm.title" placeholder="例如：产品周例会" maxlength="200" />
+            <el-form-item label="会议名称（选填）">
+              <el-input
+                v-model="createForm.title"
+                placeholder="选填，留空将自动命名，如：会议-2026.09.10 19:30"
+                maxlength="200"
+              />
             </el-form-item>
             <el-button type="primary" size="large" class="primary-btn" :loading="creating" @click="handleCreate">
               创建并进入
@@ -91,10 +95,6 @@ async function handleLookup() {
 }
 
 async function handleCreate() {
-  if (!createForm.title.trim()) {
-    ElMessage.warning('请输入会议名称')
-    return
-  }
   creating.value = true
   try {
     const payload: any = {

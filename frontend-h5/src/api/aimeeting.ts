@@ -25,26 +25,55 @@ function generateDeviceId(): string {
 export const lookupMeeting = (meetingCode: string, deviceId: string) =>
   request.post('/client/meetings/lookup', { meeting_code: meetingCode, device_id: deviceId })
 
-// 创建会议
-export const createMeeting = (data: { title: string; participants?: string; start_time?: string | null }) =>
+// 创建会议（名称可选，留空自动命名）
+export const createMeeting = (data: { title?: string; participants?: string; start_time?: string | null }) =>
   request.post('/client/meetings', data)
 
-// 查询会议详情（含转写进度、纪要状态）
+// 修改会议名称（全程可改）
+export const renameMeeting = (meetingId: number, deviceId: string, title: string) =>
+  request.patch(`/client/meetings/${meetingId}`, { title, device_id: deviceId })
+
+// 查询会议详情（含转写进度、纪要状态、说话人）
 export const getMeeting = (meetingId: number, deviceId: string) =>
   request.get(`/client/meetings/${meetingId}`, { params: { device_id: deviceId } })
 
-// 上传录音（multipart）
-export function uploadAudio(meetingId: number, deviceId: string, blob: Blob, duration: number) {
+// 轮询最新句级转写（实时对话流）
+export const getTranscript = (meetingId: number, deviceId: string) =>
+  request.get(`/client/meetings/${meetingId}/transcript`, { params: { device_id: deviceId } })
+
+// 上传录音切片（multipart，携带会议内偏移秒数）
+export function uploadAudio(
+  meetingId: number,
+  deviceId: string,
+  blob: Blob,
+  duration: number,
+  offsetSec: number,
+) {
   const form = new FormData()
   form.append('file', blob, `rec_${Date.now()}.webm`)
   form.append('device_id', deviceId)
   form.append('duration', String(duration))
+  form.append('offset_sec', String(offsetSec))
   return request.post(`/client/meetings/${meetingId}/audio`, form, {
     headers: { 'Content-Type': 'multipart/form-data' },
   })
 }
 
-// 结束会议（触发 AI 纪要）
+// 结束会议（触发会后链路：等转写完 → 说话人分离 → AI 纪要）
 export function finishMeeting(meetingId: number, deviceId: string) {
   return request.post(`/client/meetings/${meetingId}/finish`, { device_id: deviceId })
+}
+
+// 修改说话人显示名称
+export function updateSpeaker(
+  meetingId: number,
+  speakerId: number,
+  deviceId: string,
+  displayName: string,
+) {
+  return request.patch(`/client/meetings/${meetingId}/speakers/${speakerId}`, {
+    display_name: displayName,
+  }, {
+    params: { device_id: deviceId },
+  })
 }
