@@ -55,7 +55,18 @@ export function useRecorder() {
       }, 500)
       return true
     } catch (e: any) {
-      error.value = e?.name === 'NotAllowedError' ? '麦克风权限被拒绝，请允许访问麦克风' : '无法启动录音：' + (e?.message || e)
+      if (e?.name === 'NotAllowedError' || e?.name === 'PermissionDeniedError') {
+        const isMac = /Mac|iPhone|iPad/.test(navigator.userAgent)
+        error.value = isMac
+          ? '无法访问麦克风：请在「系统设置 → 隐私与安全性 → 麦克风」中允许浏览器访问麦克风，然后刷新页面重试'
+          : '麦克风权限被拒绝：请在浏览器地址栏左侧的权限图标中允许麦克风，然后刷新页面重试'
+      } else if (e?.name === 'NotFoundError') {
+        error.value = '未检测到麦克风设备，请检查耳机/麦克风是否连接'
+      } else if (e?.name === 'NotReadableError' || e?.name === 'AbortError') {
+        error.value = '麦克风被其他应用占用，请关闭占用程序后重试'
+      } else {
+        error.value = '无法启动录音：' + (e?.message || e)
+      }
       return false
     }
   }
