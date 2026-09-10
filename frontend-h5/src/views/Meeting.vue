@@ -55,6 +55,7 @@
             </template>
           </div>
           <div v-if="recError" class="rec-error">{{ recError }}</div>
+          <div class="rec-tip">仅录制麦克风声音；iOS Safari 无法录制系统播放的声音，切到后台会中断录音。</div>
         </div>
       </template>
     </el-card>
@@ -255,6 +256,14 @@ onBeforeUnmount(() => {
   margin-top: 10px;
   color: var(--el-color-danger);
   font-size: 13px;
+}
+.rec-tip {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed #ebeef5;
+  color: #c0c4cc;
+  font-size: 12px;
+  line-height: 1.6;
 }
 .transcript {
   color: #303133;

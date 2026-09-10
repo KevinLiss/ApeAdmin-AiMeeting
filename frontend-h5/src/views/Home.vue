@@ -5,7 +5,6 @@
         <el-icon :size="22" color="#fff"><Microphone /></el-icon>
       </div>
       <h1>AI 会议</h1>
-      <p class="text-muted">语音录音 · 自动转写 · AI 纪要</p>
     </div>
 
     <!-- 单一入口面板：进入会议 / 创建会议 模式切换 -->
@@ -13,16 +12,13 @@
       <transition name="fade-slide" mode="out-in">
         <!-- 进入会议 -->
         <div v-if="mode === 'join'" key="join" class="panel-body">
-          <div class="panel-head">
-            <h2>进入会议</h2>
-            <p>输入会议编号，无需账号即可加入</p>
-          </div>
+          <h2 class="panel-title">进入会议</h2>
           <el-form @submit.prevent="handleLookup">
             <el-input
               v-model="code"
               size="large"
               class="code-input"
-              placeholder="请输入 8 位会议编号"
+              placeholder="请输入会议编号"
               maxlength="32"
               style="text-transform: uppercase"
               @keyup.enter="handleLookup"
@@ -39,27 +35,13 @@
 
         <!-- 创建会议 -->
         <div v-else key="create" class="panel-body">
-          <div class="panel-head">
-            <h2>创建会议</h2>
-            <p>创建后立即进入，即可开始录音</p>
-          </div>
-          <el-form :model="createForm" label-position="top">
+          <h2 class="panel-title">创建会议</h2>
+          <el-form :model="createForm" label-position="top" @submit.prevent="handleCreate">
             <el-form-item label="会议名称" required>
               <el-input v-model="createForm.title" placeholder="例如：产品周例会" maxlength="200" />
             </el-form-item>
-            <el-form-item label="参会人（可选）">
-              <el-input v-model="createForm.participants" placeholder="多个参会人用逗号分隔" />
-            </el-form-item>
-            <el-form-item label="开始时间（可选）">
-              <el-date-picker
-                v-model="createForm.start_time"
-                type="datetime"
-                placeholder="选择时间"
-                style="width: 100%"
-              />
-            </el-form-item>
             <el-button type="primary" size="large" class="primary-btn" :loading="creating" @click="handleCreate">
-              创建并进入会议
+              创建并进入
             </el-button>
           </el-form>
           <div class="switch-row">
@@ -68,15 +50,6 @@
         </div>
       </transition>
     </div>
-
-    <!-- 录音功能提示 -->
-    <el-alert
-      type="info"
-      :closable="false"
-      show-icon
-      title="录音说明：仅录制麦克风声音；iOS Safari 无法录制系统播放的声音。切到后台会中断录音。"
-      class="rec-tip"
-    />
   </div>
 </template>
 
@@ -97,8 +70,6 @@ const creating = ref(false)
 
 const createForm = reactive({
   title: '',
-  participants: '',
-  start_time: null as string | null,
 })
 
 async function handleLookup() {
@@ -128,9 +99,7 @@ async function handleCreate() {
   try {
     const payload: any = {
       title: createForm.title.trim(),
-      participants: createForm.participants,
     }
-    if (createForm.start_time) payload.start_time = createForm.start_time
     const data: any = await createMeeting(payload)
     ElMessage.success(`会议创建成功，编号：${data.meeting_code}`)
     // 创建后自动绑定设备并进入
@@ -154,7 +123,7 @@ async function handleCreate() {
 /* ── 品牌区 ─────────────────────────── */
 .hero {
   text-align: center;
-  padding: 24px 0 28px;
+  padding: 28px 0 24px;
 }
 .logo-badge {
   width: 52px;
@@ -172,31 +141,20 @@ async function handleCreate() {
   font-size: 26px;
   font-weight: 700;
   letter-spacing: 1px;
-  margin-bottom: 6px;
-}
-.hero .text-muted {
-  font-size: 13px;
 }
 
 /* ── 主面板 ── */
 .panel {
   background: #fff;
   border-radius: 20px;
-  padding: 26px 20px 20px;
+  padding: 28px 20px 20px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.08);
-  margin-bottom: 16px;
 }
-.panel-head {
-  margin-bottom: 18px;
-}
-.panel-head h2 {
+.panel-title {
   font-size: 20px;
   font-weight: 700;
-  margin-bottom: 4px;
-}
-.panel-head p {
-  font-size: 13px;
-  color: #909399;
+  margin-bottom: 20px;
+  text-align: center;
 }
 
 .code-input :deep(.el-input__wrapper) {
@@ -269,10 +227,5 @@ async function handleCreate() {
 .fade-slide-leave-to {
   opacity: 0;
   transform: translateY(-10px);
-}
-
-.rec-tip {
-  border-radius: 10px;
-  font-size: 12px;
 }
 </style>
