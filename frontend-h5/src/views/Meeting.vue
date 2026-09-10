@@ -164,7 +164,7 @@ async function refresh() {
   }
 }
 
-async function startRecorder() {
+async function startRecord() {
   starting.value = true
   try {
     const ok = await recorder.start()
