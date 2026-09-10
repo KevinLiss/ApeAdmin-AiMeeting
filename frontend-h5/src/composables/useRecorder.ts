@@ -299,6 +299,7 @@ export function useRecorder() {
       paused.value = true
       if (timer) clearInterval(timer)
       if (sliceTimer) clearInterval(sliceTimer)
+      sliceTimer = null
     }
   }
 
@@ -310,7 +311,26 @@ export function useRecorder() {
       timer = window.setInterval(() => {
         elapsed.value = Math.floor((Date.now() - startTime) / 1000)
       }, 500)
-
+      // 关键：暂停时清掉了 sliceTimer，恢复必须重新启动，否则切片上传永远停止
+      if (sliceTimer === null) {
+        sliceTimer = window.setInterval(async () => {
+          if (!recording.value || paused.value) return
+          try {
+            const blob = await stopCurrentSlice()
+            if (blob && blob.size > 0 && onSlice) {
+              const offsetSec = currentSliceOffset
+              await uploadSlice(blob, offsetSec)
+            }
+            if (recording.value && !paused.value) {
+              currentSliceOffset = elapsed.value
+              await mediaSliceStart()
+            }
+          } catch (e) {
+            console.error('[useRecorder] slice error', e)
+            try { await mediaSliceStart() } catch { /* 忽略 */ }
+          }
+        }, SLICE_MS)
+      }
     }
   }
 
