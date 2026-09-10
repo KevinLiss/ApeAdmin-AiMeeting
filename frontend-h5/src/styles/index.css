@@ -1,0 +1,51 @@
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  background: #f5f7fa;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  min-height: 100vh;
+  /* iOS 安全区 */
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* 移动端通用容器 */
+.page {
+  max-width: 640px;
+  margin: 0 auto;
+  min-height: 100vh;
+  padding: 16px;
+}
+
+.text-muted {
+  color: #909399;
+  font-size: 13px;
+}
+
+.text-center {
+  text-align: center;
+}
+
+/* 按钮大尺寸适配触屏 */
+.el-button {
+  min-height: 40px;
+}
+
+/* 卡片间距 */
+.el-card {
+  border-radius: 12px;
+  margin-bottom: 16px;
+  border: none;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06) !important;
+}
+
+.el-card__header {
+  font-weight: 600;
+}

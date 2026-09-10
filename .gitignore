@@ -1,0 +1,60 @@
+# ========================================
+# Python / FastAPI Backend
+# ========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+runtimes/
+
+# Database
+*.db
+*.sqlite3
+*.db.bak_*
+
+# 运行时上传（插件包 / 媒体）
+backend/src/uploads/
+
+# Whisper 语音转写模型（体积大，按需下载）
+backend/models/
+
+# ========================================
+# Node / Vue3 Frontend
+# ========================================
+node_modules/
+frontend/node_modules/
+frontend-h5/node_modules/
+dist/
+frontend/dist/
+frontend-h5/dist/
+
+# ========================================
+# Environment & Secrets
+# ========================================
+.env
+.env.*
+!.env.example
+
+# ========================================
+# OS Files
+# ========================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ========================================
+# Temporary / Agent Files
+# ========================================
+.temp/
+*.log
+*.tmp

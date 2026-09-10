@@ -1,0 +1,8 @@
+{
+  "name": "aimeeting",
+  "display_name": "AI 会议助手",
+  "version": "1.0.0",
+  "description": "会议创建与管理（线上/线下）、会议过程实时记录登记、会议结束后 AI 自动生成会议总结与会议纪要",
+  "author": "ApeAdmin",
+  "dependencies": []
+}
