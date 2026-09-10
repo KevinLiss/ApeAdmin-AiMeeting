@@ -32,6 +32,31 @@
       </div>
       <template v-else>
         <div class="recorder-box">
+          <!-- 权限预检条（录音未开始时展示） -->
+          <div v-if="!recRecording" class="perm-bar">
+            <template v-if="permStatus === 'granted'">
+              <el-icon class="perm-icon ok"><CircleCheckFilled /></el-icon>
+              <span class="perm-text ok">麦克风已就绪</span>
+            </template>
+            <template v-else-if="permStatus === 'denied'">
+              <el-icon class="perm-icon bad"><CircleCloseFilled /></el-icon>
+              <span class="perm-text bad">麦克风权限被拒绝</span>
+              <el-button size="small" text type="primary" @click="permHelpVisible = true">如何恢复权限</el-button>
+            </template>
+            <template v-else-if="permStatus === 'checking'">
+              <el-icon class="icon-loading"><Loading /></el-icon>
+              <span class="perm-text">正在检测麦克风权限...</span>
+            </template>
+            <template v-else>
+              <!-- unknown / prompt：先授权再录音 -->
+              <el-icon class="perm-icon"><Microphone /></el-icon>
+              <span class="perm-text">首次使用请先授权麦克风</span>
+              <el-button
+                size="small" type="primary" round :loading="permRequesting"
+                @click="doRequestPermission"
+              >授权麦克风</el-button>
+            </template>
+          </div>
           <div class="timer">{{ recFmtDuration(recElapsed) }}</div>
           <div class="rec-state">
             <el-tag :type="recRecording ? (recPaused ? 'warning' : 'danger') : 'info'" size="small">
@@ -45,6 +70,7 @@
             <el-button
               v-if="!recRecording"
               type="danger" size="large" round :loading="starting"
+              :disabled="permStatus === 'denied'"
               @click="startRecord"
             >
               <el-icon><Microphone /></el-icon> 开始录音
@@ -72,6 +98,29 @@
         </div>
       </template>
     </el-card>
+
+    <!-- 权限恢复指引弹窗 -->
+    <el-dialog v-model="permHelpVisible" title="恢复麦克风权限" width="88%" append-to-body>
+      <div class="perm-help">
+        <p class="perm-help-title">Chrome / Edge（电脑）</p>
+        <ol>
+          <li>点击地址栏左侧的 <b>锁形图标</b>（或音符图标）</li>
+          <li>找到「麦克风」，切换为<b>允许</b></li>
+          <li>刷新页面后重新开始录音</li>
+        </ol>
+        <p class="perm-help-title">Safari（iPhone / iPad / Mac）</p>
+        <ol>
+          <li>打开「设置」App</li>
+          <li>进入「Safari 浏览器」→「麦克风」，选择<b>允许</b>（iOS 需到设置里找到该网站单独开启）</li>
+          <li>返回本页面刷新重试</li>
+        </ol>
+        <p class="perm-help-title">仍不行？</p>
+        <p>macOS 用户请再检查：系统设置 → 隐私与安全性 → 麦克风 → 勾选浏览器。</p>
+      </div>
+      <template #footer>
+        <el-button type="primary" @click="permHelpVisible = false">我知道了</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 实时对话流（轮询句级转写） -->
     <el-card shadow="never">
@@ -173,7 +222,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Microphone, VideoPause, VideoPlay, Promotion, EditPen } from '@element-plus/icons-vue'
+import { Microphone, VideoPause, VideoPlay, Promotion, EditPen, CircleCheckFilled, CircleCloseFilled, Loading } from '@element-plus/icons-vue'
 import {
   getMeeting, getTranscript, uploadAudio, finishMeeting, renameMeeting, updateSpeaker, getDeviceId,
 } from '@/api/aimeeting'
@@ -211,6 +260,18 @@ const recPaused = recorder.paused
 const recElapsed = recorder.elapsed
 const recError = recorder.error
 const recFmtDuration = recorder.fmtDuration
+// 麦克风权限（独立授权）
+const permStatus = recorder.permission
+const permRequesting = recorder.requesting
+const permHelpVisible = ref(false)
+
+async function doRequestPermission() {
+  const ok = await recorder.requestPermission()
+  if (ok) {
+    ElMessage.success('麦克风已授权，可以开始录音')
+  }
+  // 失败时错误文案已由 useRecorder 写入 recError 展示
+}
 
 let pollTimer: number | null = null
 
@@ -390,6 +451,8 @@ async function confirmSpeaker() {
 onMounted(() => {
   refresh()
   startPolling()
+  // 无感检测麦克风权限（不弹窗）：已授权显示「已就绪」，被拒显示引导
+  recorder.checkPermission()
 })
 onBeforeUnmount(() => {
   stopPolling()
@@ -421,6 +484,59 @@ onBeforeUnmount(() => {
 .recorder-box {
   text-align: center;
   padding: 8px 0;
+}
+/* 权限预检条 */
+.perm-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  margin-bottom: 14px;
+  border-radius: 10px;
+  background: #f5f7fa;
+  font-size: 13px;
+}
+.perm-icon {
+  font-size: 15px;
+  color: #909399;
+}
+.perm-icon.ok {
+  color: var(--el-color-success);
+}
+.perm-icon.bad {
+  color: var(--el-color-danger);
+}
+.perm-text {
+  color: #606266;
+}
+.perm-text.ok {
+  color: var(--el-color-success);
+  font-weight: 600;
+}
+.perm-text.bad {
+  color: var(--el-color-danger);
+  font-weight: 600;
+}
+.icon-loading {
+  animation: rotating 1.2s linear infinite;
+}
+@keyframes rotating {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.perm-help-title {
+  font-weight: 600;
+  margin: 12px 0 4px;
+}
+.perm-help ol {
+  padding-left: 20px;
+  margin: 4px 0;
+}
+.perm-help li {
+  margin: 4px 0;
+  color: #606266;
 }
 .timer {
   font-size: 44px;
