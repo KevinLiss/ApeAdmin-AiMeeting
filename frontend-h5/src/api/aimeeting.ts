@@ -41,6 +41,10 @@ export const getMeeting = (meetingId: number, deviceId: string) =>
 export const getTranscript = (meetingId: number, deviceId: string) =>
   request.get(`/client/meetings/${meetingId}/transcript`, { params: { device_id: deviceId } })
 
+// 正式开始会议（状态流转 scheduled → in_progress，触发增量声纹分离）
+export const startMeeting = (meetingId: number, deviceId: string) =>
+  request.post(`/client/meetings/${meetingId}/start`, { device_id: deviceId })
+
 // 上传录音切片（multipart，携带会议内偏移秒数）
 export function uploadAudio(
   meetingId: number,

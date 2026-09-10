@@ -135,21 +135,21 @@ class AimeetingSpeaker(IDMixin, TimestampMixin, Base):
     """会议说话人（声纹聚类出的虚拟身份，名称可编辑）。
 
     表名：``aimeeting_speakers``
-    说话人分离完成后，按聚类编号生成「说话人 1/2/3」，用户可改为真实姓名。
+    说话人分离完成后，按聚类编号生成「发言者A001」，用户可改为真实姓名。
     """
 
     __tablename__ = "aimeeting_speakers"
 
     meeting_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True, comment="所属会议ID")
     speaker_no: Mapped[int] = mapped_column(Integer, nullable=False, comment="说话人聚类编号（1 起）")
-    display_name: Mapped[str] = mapped_column(String(100), default="", comment="显示名称（可编辑，默认「说话人 N」）")
+    display_name: Mapped[str] = mapped_column(String(100), default="", comment="显示名称（可编辑，默认「发言者A001」）")
     # 说话时间统计（秒），由分离结果聚合
     total_speak_sec: Mapped[int] = mapped_column(Integer, default=0, comment="累计说话时长（秒）")
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, comment="软删除")
 
 
 class AimeetingMinutes(IDMixin, TimestampMixin, Base):
-    """AI 生成的会议总结与会议纪要。
+    """AI 生成的会议总结与会议记录。
 
     表名：``aimeeting_minutes``
     会议转写完成后由 AI 自动生成：一句话总结 + 结构化会议纪要。

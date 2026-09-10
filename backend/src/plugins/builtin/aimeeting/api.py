@@ -52,6 +52,7 @@ from src.plugins.builtin.aimeeting.services import (
     generate_meeting_code,
     generate_minutes,
     merge_transcript_to_meeting,
+    speaker_code,
     transcribe_record_async,
     wait_for_records_done,
 )
@@ -258,31 +259,75 @@ async def client_upload_audio(
     )
 
 
+@router.post("/client/meetings/{meeting_id}/start")
+async def client_start_meeting(
+    meeting_id: int,
+    body: DeviceBind,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """用户端：正式开始会议（开始计时，状态流转 scheduled → in_progress）。"""
+    meeting = await _get_meeting_or_404(db, meeting_id)
+    await _check_device(meeting, body.device_id)
+
+    if meeting.status == MeetingStatus.ENDED:
+        raise HTTPException(status_code=409, detail="会议已结束")
+    if meeting.status != MeetingStatus.IN_PROGRESS:
+        meeting.status = MeetingStatus.IN_PROGRESS
+        meeting.actual_start = meeting.actual_start or _now()
+        await db.commit()
+        await db.refresh(meeting)
+
+    return success_response(
+        data={"status": meeting.status, "actual_start": meeting.actual_start.isoformat() if meeting.actual_start else None},
+        msg="会议已开始",
+    )
+
+
 @router.post("/client/meetings/{meeting_id}/finish")
 async def client_finish_meeting(
     meeting_id: int,
     body: DeviceBind,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """用户端：结束会议，触发会后处理链路（等转写完 → 说话人分离 → AI 纪要）。"""
+    """用户端：结束会议。
+
+    文字记录模式：直接结束存档（后台可查看会议记录）。
+    若有录音：等待在途转写完成 → 合并 → 触发会后链路（说话人分离 + AI 纪要）。
+    """
     meeting = await _get_meeting_or_404(db, meeting_id)
     await _check_device(meeting, body.device_id)
 
-    # 等待在途转写完成（最多 30 秒）
-    done = await wait_for_records_done(db, meeting, timeout=30.0)
-    # 合并转写（兼容部分场景直接落库）
-    await merge_transcript_to_meeting(db, meeting)
+    # 是否存在录音记录（文字模式没有录音则跳过语音链路）
+    has_records = (
+        await db.execute(
+            select(AimeetingMinuteRecord.id)
+            .where(
+                AimeetingMinuteRecord.meeting_id == meeting.id,
+                AimeetingMinuteRecord.is_deleted == False,  # noqa: E712
+            )
+            .limit(1)
+        )
+    ).scalars().first()
+
+    if has_records:
+        # 等待在途转写完成（最多 30 秒）
+        done = await wait_for_records_done(db, meeting, timeout=30.0)
+        # 合并转写（兼容部分场景直接落库）
+        await merge_transcript_to_meeting(db, meeting)
+        # 会后链路放后台任务（说话人分离 + AI 纪要可能耗时较长）
+        asyncio.ensure_future(finalize_meeting(meeting.id))
+    else:
+        done = True
+
     meeting.status = MeetingStatus.ENDED
     meeting.actual_end = meeting.actual_end or _now()
     meeting.audio_duration = meeting.audio_duration or 0
     await db.commit()
     await db.refresh(meeting)
 
-    # 会后链路放后台任务（说话人分离 + AI 纪要可能耗时较长）
-    asyncio.ensure_future(finalize_meeting(meeting.id))
     return success_response(
         data={"status": meeting.status, "transcripts_done": done},
-        msg="会议已结束，纪要生成中",
+        msg="会议已结束" + ("" if has_records else "，会议记录已存档"),
     )
 
 
@@ -389,7 +434,7 @@ async def client_get_transcript(
 
     for seg in segments:
         no = seg.get("speaker", 0)
-        seg["speaker_name"] = speaker_names.get(no, f"说话人{no}" if no else "")
+        seg["speaker_name"] = speaker_names.get(no, f"发言者{speaker_code(no)}" if no else "")
 
     return success_response(data={
         "segments": segments,

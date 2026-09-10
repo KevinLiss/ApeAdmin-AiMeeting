@@ -171,6 +171,17 @@ async def transcribe_record_async(record_id: int) -> None:
         except Exception as exc:  # noqa: BLE001
             logger.exception(f"[Aimeeting] 合并转写失败 meeting={meeting.id}: {exc}")
 
+        # 会议进行中：增量跑说话人分离（实时区分谁在说话，前端轮询可见）
+        if (
+            meeting.status == "in_progress"
+            and DIARIZATION_DIR.exists()
+            and meeting.transcript_text.strip()
+        ):
+            try:
+                await run_diarization(db, meeting, incremental=True)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[Aimeeting] 增量说话人分离失败 meeting={meeting.id}: {exc}")
+
 
 async def wait_for_records_done(db: AsyncSession, meeting: AimeetingMeeting, timeout: float = 60.0) -> bool:
     """等待会议全部转写记录完成（结束会议前调用，防止漏掉最后几段）。
@@ -236,6 +247,21 @@ async def merge_transcript_to_meeting(db: AsyncSession, meeting: AimeetingMeetin
     )
     records = result.scalars().all()
 
+    # 保留已回填的说话人（说话人分离会把 speaker 写回 transcript_json；
+    # 若不保留，每次新转写片 merge 重建会把已有 speaker 清零）
+    existing_speakers: dict[tuple[float, float], int] = {}
+    try:
+        for old in json.loads(meeting.transcript_json or "[]"):
+            try:
+                existing_speakers[(
+                    round(float(old.get("start", 0)), 3),
+                    round(float(old.get("end", 0)), 3),
+                )] = int(old.get("speaker", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+    except json.JSONDecodeError:
+        pass
+
     all_segments: list[dict] = []
     for r in records:
         if not r.segments_json:
@@ -251,12 +277,22 @@ async def merge_transcript_to_meeting(db: AsyncSession, meeting: AimeetingMeetin
         try:
             for seg in json.loads(r.segments_json):
                 seg.setdefault("speaker", 0)
+                # 命中已有分离结果则保留 speaker（按时间段匹配）
+                key = (
+                    round(float(seg.get("start", 0)), 3),
+                    round(float(seg.get("end", 0)), 3),
+                )
+                if key in existing_speakers:
+                    seg["speaker"] = existing_speakers[key]
                 all_segments.append(seg)
         except json.JSONDecodeError:
             logger.warning(f"[Aimeeting] record {r.id} segments_json 解析失败，跳过")
 
     all_segments.sort(key=lambda s: s["start"])
-    meeting.transcript_text = "\n".join(s["text"] for s in all_segments if s["text"].strip())
+    meeting.transcript_text = "\n".join(
+        f"{speaker_code(s['speaker'])}: {s['text']}" if s.get("speaker") else s["text"]
+        for s in all_segments if s["text"].strip()
+    )
     meeting.transcript_json = json.dumps(all_segments, ensure_ascii=False)
     meeting.transcript_status = (
         TranscriptStatus.SUCCESS if meeting.transcript_text.strip() else meeting.transcript_status
@@ -268,7 +304,16 @@ async def merge_transcript_to_meeting(db: AsyncSession, meeting: AimeetingMeetin
 
 # ── 说话人分离 ─────────────────────────────────────────────────────────
 
-async def run_diarization(db: AsyncSession, meeting: AimeetingMeeting) -> bool:
+def speaker_code(no: int) -> str:
+    """聚类编号 → 发言者编号（1→A001，27→A002…AA001 起扩展）。"""
+    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    no0 = no - 1
+    letter = letters[no0 % 26]
+    seq = no0 // 26 + 1
+    return f"{letter}{seq:03d}"
+
+
+async def run_diarization(db: AsyncSession, meeting: AimeetingMeeting, incremental: bool = False) -> bool:
     """对会议音频跑说话人分离，输出说话人区间并对齐到句级转写。
 
     模型：sherpa-onnx（pyannote 分段 + Wespeaker 声纹，ONNX 离线）。
@@ -276,12 +321,16 @@ async def run_diarization(db: AsyncSession, meeting: AimeetingMeeting) -> bool:
     1. 拼接会议全部录音片段为完整音频（按 offset 排序，不足处补静音）。
     2. sherpa-onnx 跑 diarization，输出 [{start, end, speaker}]。
     3. 与 transcript_json 句级片段按时间重叠对齐，回填 speaker 编号。
-    4. 生成/更新 aimeeting_speakers 表（说话人 1/2/3 + 说话时长）。
+    4. 生成/更新 aimeeting_speakers 表（发言者A001 + 说话时长）。
+
+    incremental=True：会议进行中的增量分离，保留用户已改过的说话人名称，
+    中间失败不打成 failed（下次分片继续尝试）。
 
     返回是否成功。
     """
     if not DIARIZATION_DIR.exists():
-        meeting.diarization_status = "failed"
+        if not incremental:
+            meeting.diarization_status = "failed"
         logger.warning(f"[Aimeeting] 说话人分离模型未下载：{DIARIZATION_DIR}，跳过")
         await db.commit()
         return False
@@ -312,7 +361,8 @@ async def run_diarization(db: AsyncSession, meeting: AimeetingMeeting) -> bool:
         # 3. 说话人分离（线程池）
         diar_segments = await asyncio.to_thread(_diarize_sync, str(merged_audio))
         if not diar_segments:
-            meeting.diarization_status = "failed"
+            if not incremental:
+                meeting.diarization_status = "failed"
             await db.commit()
             return False
 
@@ -322,13 +372,13 @@ async def run_diarization(db: AsyncSession, meeting: AimeetingMeeting) -> bool:
             for seg in segments:
                 seg["speaker"] = _match_speaker(seg, diar_segments)
             meeting.transcript_json = json.dumps(segments, ensure_ascii=False)
-            # 同步纯文本格式：说话人 N: 文本
+            # 同步纯文本格式：发言者A001: 文本
             meeting.transcript_text = "\n".join(
-                f"说话人{s['speaker']}: {s['text']}" if s.get("speaker") else s["text"]
+                f"{speaker_code(s['speaker'])}: {s['text']}" if s.get("speaker") else s["text"]
                 for s in segments
             )
 
-        # 5. 写入/更新 speakers 表
+        # 5. 写入/更新 speakers 表（增量模式保留用户已改名的显示名）
         speak_sec: dict[int, int] = {}
         for d in diar_segments:
             speak_sec[d["speaker"]] = speak_sec.get(d["speaker"], 0) + int(d["end"] - d["start"])
@@ -343,7 +393,7 @@ async def run_diarization(db: AsyncSession, meeting: AimeetingMeeting) -> bool:
                 db.add(AimeetingSpeaker(
                     meeting_id=meeting.id,
                     speaker_no=no,
-                    display_name=f"说话人{no}",
+                    display_name=f"发言者{speaker_code(no)}",
                     total_speak_sec=sec,
                 ))
 
@@ -355,8 +405,9 @@ async def run_diarization(db: AsyncSession, meeting: AimeetingMeeting) -> bool:
 
     except Exception as exc:  # noqa: BLE001
         logger.exception(f"[Aimeeting] 说话人分离失败: {exc}")
-        meeting.diarization_status = "failed"
-        await db.commit()
+        if not incremental:
+            meeting.diarization_status = "failed"
+            await db.commit()
         return False
 
 

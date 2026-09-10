@@ -1,7 +1,7 @@
 <template>
   <div class="page meeting-page">
     <!-- 顶部会议信息（标题可编辑） -->
-    <el-card shadow="never">
+    <el-card shadow="never" class="head-card">
       <div class="meeting-head">
         <div class="title-row">
           <h2 class="title-text" @click="openRename">
@@ -13,136 +13,118 @@
           <el-tag size="small" effect="plain">{{ meeting?.meeting_code }}</el-tag>
           <el-tag size="small" :type="statusType(meeting?.status)">{{ statusText(meeting?.status) }}</el-tag>
         </div>
-        <div v-if="meeting?.participants" class="text-muted" style="margin-top: 6px">
-          参会人：{{ meeting.participants }}
-        </div>
       </div>
     </el-card>
 
-    <!-- 录音控制（15 秒自动切片上传） -->
-    <el-card shadow="never">
-      <template #header>
-        <div class="card-head">
-          <span>语音录音</span>
-          <el-tag v-if="recording" size="small" type="danger" effect="plain">每 15 秒自动上传</el-tag>
-        </div>
-      </template>
+    <!-- 录音控制 -->
+    <el-card shadow="never" class="ctrl-card">
       <div v-if="!recSupported" class="unsupported">
         <el-alert type="error" :closable="false" show-icon title="当前浏览器不支持录音，请使用最新版 Chrome / Safari" />
       </div>
-      <template v-else>
-        <div class="recorder-box">
-          <!-- 权限预检条（录音未开始时展示） -->
-          <div v-if="!recRecording" class="perm-bar">
-            <template v-if="permStatus === 'granted'">
-              <el-icon class="perm-icon ok"><CircleCheckFilled /></el-icon>
-              <span class="perm-text ok">麦克风已就绪</span>
-            </template>
-            <template v-else-if="permStatus === 'denied'">
-              <el-icon class="perm-icon bad"><CircleCloseFilled /></el-icon>
-              <span class="perm-text bad">麦克风权限被拒绝</span>
-              <el-button size="small" text type="primary" @click="permHelpVisible = true">如何恢复权限</el-button>
-            </template>
-            <template v-else-if="permStatus === 'checking'">
-              <el-icon class="icon-loading"><Loading /></el-icon>
-              <span class="perm-text">正在检测麦克风权限...</span>
-            </template>
-            <template v-else>
-              <!-- unknown / prompt：先授权再录音 -->
-              <el-icon class="perm-icon"><Microphone /></el-icon>
-              <span class="perm-text">首次使用请先授权麦克风</span>
-              <el-button
-                size="small" type="primary" round :loading="permRequesting"
-                @click="doRequestPermission"
-              >授权麦克风</el-button>
-            </template>
+      <div v-else class="ctrl-box">
+        <!-- 未开始 -->
+        <template v-if="meeting?.status === 'scheduled' || (!recRecording && meeting?.status !== 'ended' && meeting?.status !== 'in_progress')">
+          <!-- 已授权 / 无法检测（Safari 等）：直接开始 -->
+          <div v-if="permStatus === 'granted' || permStatus === 'unknown'" class="start-wrap">
+            <el-button type="primary" size="large" round class="big-btn" :loading="starting" @click="handleStart">
+              <el-icon><VideoPlay /></el-icon> 正式开始会议
+            </el-button>
+            <div class="ctrl-tip">点击开始录音并计时，语音实时转写为文字</div>
           </div>
-          <div class="timer">{{ recFmtDuration(recElapsed) }}</div>
-          <div class="rec-state">
-            <el-tag :type="recRecording ? (recPaused ? 'warning' : 'danger') : 'info'" size="small">
-              {{ recRecording ? (recPaused ? '已暂停' : '录音中') : '未录音' }}
-            </el-tag>
-            <el-tag v-if="transcribing > 0" size="small" type="primary" effect="plain" style="margin-left: 6px">
+          <!-- 未授权（首次使用）：先授权 -->
+          <div v-else-if="permStatus === 'prompt'" class="start-wrap">
+            <el-button type="primary" size="large" round class="big-btn" :loading="recRequesting" @click="handleAuth">
+              <el-icon><Microphone /></el-icon> 授权麦克风
+            </el-button>
+            <div class="ctrl-tip">首次使用请先授权麦克风，录音仅在本页会议期间进行</div>
+            <div v-if="recError" class="rec-error">{{ recError }}</div>
+          </div>
+          <!-- 被拒绝 -->
+          <div v-else-if="permStatus === 'denied'" class="perm-denied">
+            <el-alert type="error" :closable="false" show-icon title="麦克风权限被拒绝" description="请点击浏览器地址栏左侧的锁形/音符图标，将麦克风设为「允许」后刷新页面" />
+          </div>
+          <!-- 不支持 -->
+          <div v-else-if="permStatus === 'unsupported'" class="perm-denied">
+            <el-alert type="error" :closable="false" show-icon title="当前浏览器不支持录音" description="请使用最新版 Chrome / Safari 打开本页" />
+          </div>
+          <!-- 检测中 -->
+          <div v-else class="start-wrap">
+            <el-button type="primary" size="large" round class="big-btn" :loading="true" :disabled="true">
+              <el-icon><Loading /></el-icon> 检测麦克风权限...
+            </el-button>
+            <div class="ctrl-tip">正在检测麦克风权限</div>
+          </div>
+        </template>
+
+        <!-- 进行中（录音中） -->
+        <template v-else-if="meeting?.status === 'in_progress' || recRecording">
+          <div class="live-now">
+            <div class="timer">{{ recFmtDuration(recElapsed) }}</div>
+            <el-tag v-if="transcribing > 0" size="small" type="primary" effect="plain">
               转写中 {{ transcribing }} 段
             </el-tag>
           </div>
           <div class="rec-controls">
             <el-button
-              v-if="!recRecording"
-              type="danger" size="large" round :loading="starting"
-              :disabled="permStatus === 'denied'"
-              @click="startRecord"
+              v-if="!recPaused"
+              type="warning" size="large" round @click="recorder.pause()"
             >
-              <el-icon><Microphone /></el-icon> 开始录音
+              <el-icon><VideoPause /></el-icon> 暂停
             </el-button>
-            <template v-else>
-              <el-button
-                v-if="!recPaused"
-                type="warning" size="large" round @click="recorder.pause()"
-              >
-                <el-icon><VideoPause /></el-icon> 暂停
-              </el-button>
-              <el-button
-                v-else
-                type="success" size="large" round @click="recorder.resume()"
-              >
-                <el-icon><VideoPlay /></el-icon> 继续
-              </el-button>
-              <el-button type="primary" size="large" round :loading="uploading" @click="stopAndFinish">
-                <el-icon><Promotion /></el-icon> 结束会议
-              </el-button>
-            </template>
+            <el-button
+              v-else
+              type="success" size="large" round @click="recorder.resume()"
+            >
+              <el-icon><VideoPlay /></el-icon> 继续
+            </el-button>
+            <el-button type="danger" size="large" round :loading="finishing" @click="handleFinish">
+              <el-icon><Promotion /></el-icon> 结束会议
+            </el-button>
           </div>
           <div v-if="recError" class="rec-error">{{ recError }}</div>
-          <div class="rec-tip">录音自动按 15 秒分片上传并逐段转写，无需手动操作；iOS Safari 仅能录制麦克风声音。</div>
-        </div>
-      </template>
+          <div class="ctrl-tip">会议内容实时转写中，发言自动区分说话人</div>
+        </template>
+
+        <!-- 已结束 -->
+        <template v-else-if="meeting?.status === 'ended'">
+          <el-tag type="success" size="large" effect="light">会议已结束，记录已存档</el-tag>
+        </template>
+      </div>
     </el-card>
 
-    <!-- 权限恢复指引弹窗 -->
-    <el-dialog v-model="permHelpVisible" title="恢复麦克风权限" width="88%" append-to-body>
-      <div class="perm-help">
-        <p class="perm-help-title">Chrome / Edge（电脑）</p>
-        <ol>
-          <li>点击地址栏左侧的 <b>锁形图标</b>（或音符图标）</li>
-          <li>找到「麦克风」，切换为<b>允许</b></li>
-          <li>刷新页面后重新开始录音</li>
-        </ol>
-        <p class="perm-help-title">Safari（iPhone / iPad / Mac）</p>
-        <ol>
-          <li>打开「设置」App</li>
-          <li>进入「Safari 浏览器」→「麦克风」，选择<b>允许</b>（iOS 需到设置里找到该网站单独开启）</li>
-          <li>返回本页面刷新重试</li>
-        </ol>
-        <p class="perm-help-title">仍不行？</p>
-        <p>macOS 用户请再检查：系统设置 → 隐私与安全性 → 麦克风 → 勾选浏览器。</p>
-      </div>
-      <template #footer>
-        <el-button type="primary" @click="permHelpVisible = false">我知道了</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 实时对话流（轮询句级转写） -->
-    <el-card shadow="never">
+    <!-- 实时转写流 -->
+    <el-card shadow="never" class="chat-card">
       <template #header>
         <div class="card-head">
-          <span>实时对话</span>
+          <span>实时会议记录</span>
           <el-button size="small" :loading="loadingDetail" @click="refresh">刷新</el-button>
         </div>
       </template>
-      <el-empty v-if="!loadingDetail && segments.length === 0" description="暂无对话内容，开始录音后实时呈现" />
-      <div v-else class="chat-stream">
-        <div v-for="(seg, i) in segments" :key="i" class="chat-line">
-          <span v-if="seg.speaker_name || seg.speaker" class="speaker-tag" :class="'sp-' + (seg.speaker || 0)">
-            {{ seg.speaker_name || (seg.speaker ? '说话人' + seg.speaker : '') }}
-          </span>
-          <span class="chat-text">{{ seg.text }}</span>
+
+      <div ref="chatBody" class="chat-body">
+        <div
+          v-for="(seg, i) in segments"
+          :key="i"
+          class="msg-row"
+          :class="{ 'mine': seg.speaker && seg.speaker === lastSpeakerNo }"
+        >
+          <div class="msg-avatar" :style="{ background: speakerColor(seg.speaker || 0) }">
+            {{ avatarText(seg) }}
+          </div>
+          <div class="msg-main">
+            <div class="msg-head">
+              <span class="msg-speaker">{{ seg.speaker_name || (seg.speaker ? '发言者' + seg.speaker : '未知') }}</span>
+              <span class="msg-time">{{ fmtOffset(seg.start) }}</span>
+            </div>
+            <div class="msg-bubble">{{ seg.text }}</div>
+          </div>
         </div>
+        <el-empty v-if="!loadingDetail && segments.length === 0" description="暂无内容，开始会议后实时转写" :image-size="60" />
       </div>
     </el-card>
 
     <!-- 说话人列表（可改名） -->
-    <el-card v-if="speakers.length > 0" shadow="never">
+    <el-card v-if="speakers.length > 0" shadow="never" class="speaker-card">
       <template #header>
         <div class="card-head">
           <span>参会说话人</span>
@@ -158,44 +140,23 @@
       </div>
     </el-card>
 
-    <!-- 会议纪要 -->
-    <el-card shadow="never">
+    <!-- AI 纪要（保留显示，AI 纪要后续完善） -->
+    <el-card v-if="meeting?.status === 'ended' && minutes" shadow="never" class="minutes-card">
       <template #header>
-        <div class="card-head">
-          <span>AI 会议纪要</span>
-          <el-button
-            v-if="meeting?.status === 'ended' && minutes?.status !== 'success'"
-            type="primary" size="small" :loading="finishing" @click="handleFinish"
-          >
-            生成纪要
-          </el-button>
-        </div>
+        <div class="card-head"><span>AI 会议纪要</span></div>
       </template>
-      <el-alert
-        v-if="minutes?.status === 'failed'"
-        type="error" :closable="false" show-icon
-        :title="'生成失败：' + (minutes?.error || '')"
-        style="margin-bottom: 8px"
-      />
-      <el-alert
-        v-if="minutes?.status === 'pending'"
-        type="warning" :closable="false" show-icon
-        title="纪要生成中，请稍候刷新..."
-        style="margin-bottom: 8px"
-      />
-      <el-alert
-        v-else-if="meeting?.status === 'ended' && (!minutes || minutes.status === 'none')"
-        type="info" :closable="false" show-icon
-        title="会议已结束，AI 正在生成纪要，请稍候刷新"
-        style="margin-bottom: 8px"
-      />
       <template v-if="minutes?.status === 'success'">
         <el-divider content-position="left">一句话总结</el-divider>
         <p class="summary">{{ minutes.summary }}</p>
         <el-divider content-position="left">详细纪要</el-divider>
         <div class="minutes-body pre-wrap">{{ minutes.minutes }}</div>
       </template>
-      <el-empty v-else-if="!minutes || minutes.status === 'none'" description="暂无纪要" />
+      <el-alert
+        v-else-if="minutes?.status === 'pending'"
+        type="warning" :closable="false" show-icon title="纪要生成中，请稍候刷新..." />
+      <el-alert
+        v-else-if="minutes?.status === 'failed'"
+        type="error" :closable="false" show-icon :title="'生成失败：' + (minutes?.error || '')" />
     </el-card>
 
     <!-- 改名弹窗 -->
@@ -219,12 +180,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
-import { ElMessage, ElMessageBox } from 'element-plus'
-import { Microphone, VideoPause, VideoPlay, Promotion, EditPen, CircleCheckFilled, CircleCloseFilled, Loading } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { EditPen, VideoPause, VideoPlay, Promotion, Loading, Microphone } from '@element-plus/icons-vue'
 import {
-  getMeeting, getTranscript, uploadAudio, finishMeeting, renameMeeting, updateSpeaker, getDeviceId,
+  getMeeting, getTranscript, uploadAudio, finishMeeting, renameMeeting, updateSpeaker, getDeviceId, startMeeting,
 } from '@/api/aimeeting'
 import { useRecorder } from '@/composables/useRecorder'
 
@@ -236,11 +197,10 @@ const meeting = ref<any>(null)
 const minutes = ref<any>(null)
 const segments = ref<any[]>([])
 const speakers = ref<any[]>([])
-const transcribing = ref(0) // 转写中段数（轮询得到）
+const transcribing = ref(0)
 const loadingDetail = ref(false)
 const finishing = ref(false)
 const starting = ref(false)
-const uploading = ref(false)
 
 // 改名
 const renameVisible = ref(false)
@@ -253,25 +213,20 @@ const speakerSaving = ref(false)
 const currentSpeaker = ref<any>(null)
 
 const recorder = useRecorder()
-// 解构顶层 ref，模板自动解包
 const recSupported = recorder.supported
 const recRecording = recorder.recording
 const recPaused = recorder.paused
 const recElapsed = recorder.elapsed
 const recError = recorder.error
 const recFmtDuration = recorder.fmtDuration
-// 麦克风权限（独立授权）
 const permStatus = recorder.permission
-const permRequesting = recorder.requesting
-const permHelpVisible = ref(false)
+const recRequesting = recorder.requesting
 
-async function doRequestPermission() {
-  const ok = await recorder.requestPermission()
-  if (ok) {
-    ElMessage.success('麦克风已授权，可以开始录音')
-  }
-  // 失败时错误文案已由 useRecorder 写入 recError 展示
-}
+const chatBody = ref<HTMLElement | null>(null)
+const lastSpeakerNo = computed(() => {
+  const arr = segments.value.filter((s) => s.speaker)
+  return arr.length ? arr[arr.length - 1].speaker : 0
+})
 
 let pollTimer: number | null = null
 
@@ -281,17 +236,29 @@ function statusType(s?: string) {
 function statusText(s?: string) {
   return s === 'scheduled' ? '待开始' : s === 'in_progress' ? '进行中' : s === 'ended' ? '已结束' : s === 'cancelled' ? '已取消' : s || '—'
 }
-function fmtDuration(sec: number) {
-  const s = Math.floor(sec || 0)
-  const m = Math.floor(s / 60)
-  return m > 0 ? `${m} 分 ${s % 60} 秒` : `${s} 秒`
-}
 const speakerColors = ['#4f46e5', '#7c3aed', '#0891b2', '#d97706', '#dc2626', '#059669', '#db2777', '#7c3aed']
 function speakerColor(no: number) {
+  if (!no) return '#909399'
   return speakerColors[(no - 1) % speakerColors.length]
 }
+function avatarText(seg: any) {
+  // 显示发言者编号首字母（A001→A）
+  const name = seg.speaker_name || ''
+  const m = /^([A-Z])\d+/.exec(name)
+  if (m) return m[1]
+  return name ? name.charAt(0) : '?'
+}
+function fmtOffset(start: number) {
+  const s = Math.floor(start || 0)
+  const m = Math.floor(s / 60)
+  return `${String(m).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+}
+function fmtSpeak(sec: number) {
+  if (!sec) return ''
+  const m = Math.floor(sec / 60)
+  return m > 0 ? `${m} 分 ${sec % 60} 秒` : `${sec} 秒`
+}
 
-// 会议详情 + 说话人（低频）
 async function refresh() {
   loadingDetail.value = true
   try {
@@ -306,7 +273,7 @@ async function refresh() {
   }
 }
 
-/** 轮询实时对话流（句级转写 + 转写进度 + 说话人） */
+/** 轮询实时转写流 */
 async function pollTranscript() {
   try {
     const data: any = await getTranscript(meetingId, deviceId)
@@ -314,11 +281,18 @@ async function pollTranscript() {
     transcribing.value = data?.processing_count || 0
     if (data?.speakers?.length > 0) speakers.value = data.speakers
     if (meeting.value && data?.diarization_status && meeting.value.diarization_status !== data.diarization_status) {
-      // 说话人分离完成，刷新详情拿最新说话人
       refresh()
     }
+    await nextTick()
+    scrollBottom()
   } catch {
-    // 轮询失败静默
+    // 静默
+  }
+}
+
+function scrollBottom() {
+  if (chatBody.value) {
+    chatBody.value.scrollTop = chatBody.value.scrollHeight
   }
 }
 
@@ -334,11 +308,19 @@ function stopPolling() {
   }
 }
 
-/** 开始录音：注册 15 秒切片上传回调 */
-async function startRecord() {
+/** 授权麦克风（首次使用）：成功后立即显示开始按钮 */
+async function handleAuth() {
+  const ok = await recorder.requestPermission()
+  if (ok) ElMessage.success('麦克风已就绪，可以开始会议了')
+}
+
+/** 正式开始会议：注册切片上传 + 启动录音 + 开始轮询 */
+async function handleStart() {
   starting.value = true
   try {
-    // 注册分片上传回调：每次自动切片上传一段
+    // 1. 先调后端 start：状态流转 scheduled → in_progress（增量声纹分离依赖此状态）
+    await startMeeting(meetingId, deviceId)
+    // 2. 注册分片上传回调：每次自动切片上传一段
     recorder.setSliceHandler(async (blob, offsetSec, durationSec) => {
       try {
         await uploadAudio(meetingId, deviceId, blob, durationSec, offsetSec)
@@ -348,17 +330,18 @@ async function startRecord() {
     })
     const ok = await recorder.start()
     if (ok) {
-      ElMessage.success('开始录音（15 秒自动分片上传）')
+      ElMessage.success('会议已开始，语音实时转写中')
       startPolling()
+      await refresh()
     }
   } finally {
     starting.value = false
   }
 }
 
-/** 结束会议：停止录音 → 上传最后一段 → 触发会后链路 */
-async function stopAndFinish() {
-  uploading.value = true
+/** 结束会议：停止录音 → 上传最后一段 → 触发存档 */
+async function handleFinish() {
+  finishing.value = true
   try {
     const duration = recElapsed.value
     const offset = recorder.getCurrentOffset()
@@ -366,32 +349,11 @@ async function stopAndFinish() {
     if (blob.size > 0) {
       await uploadAudio(meetingId, deviceId, blob, duration - offset, offset)
     }
-    // 结束会议（后台生成纪要）
     const data: any = await finishMeeting(meetingId, deviceId)
     minutes.value = data
-    ElMessage.success('会议已结束，AI 正在生成纪要')
+    ElMessage.success('会议已结束，记录已存档')
     await refresh()
     stopPolling()
-  } catch (e: any) {
-    ElMessage.error(e.message || '结束会议失败')
-  } finally {
-    uploading.value = false
-  }
-}
-
-async function handleFinish() {
-  finishing.value = true
-  try {
-    const data: any = await finishMeeting(meetingId, deviceId)
-    minutes.value = data
-    if (data?.status === 'success') {
-      ElMessage.success('会议纪要生成成功')
-    } else if (data?.status === 'failed') {
-      ElMessage.error('生成失败：' + (data?.error || ''))
-    } else {
-      ElMessage.info('会议已结束，纪要生成中')
-    }
-    await refresh()
   } catch (e: any) {
     ElMessage.error(e.message || '结束会议失败')
   } finally {
@@ -451,7 +413,6 @@ async function confirmSpeaker() {
 onMounted(() => {
   refresh()
   startPolling()
-  // 无感检测麦克风权限（不弹窗）：已授权显示「已就绪」，被拒显示引导
   recorder.checkPermission()
 })
 onBeforeUnmount(() => {
@@ -461,6 +422,12 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.meeting-page {
+  padding-bottom: 24px;
+}
+.head-card {
+  margin-bottom: 12px;
+}
 .meeting-head .title-row {
   display: flex;
   align-items: center;
@@ -480,73 +447,47 @@ onBeforeUnmount(() => {
 .meeting-head .meta-row {
   display: flex;
   gap: 6px;
-}
-.recorder-box {
-  text-align: center;
-  padding: 8px 0;
-}
-/* 权限预检条 */
-.perm-bar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
   flex-wrap: wrap;
-  padding: 8px 12px;
-  margin-bottom: 14px;
-  border-radius: 10px;
-  background: #f5f7fa;
-  font-size: 13px;
+  align-items: center;
 }
-.perm-icon {
-  font-size: 15px;
-  color: #909399;
+
+/* 控制区 */
+.ctrl-card {
+  margin-bottom: 12px;
 }
-.perm-icon.ok {
-  color: var(--el-color-success);
+.ctrl-box {
+  text-align: center;
+  padding: 6px 0;
 }
-.perm-icon.bad {
-  color: var(--el-color-danger);
+.start-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
 }
-.perm-text {
-  color: #606266;
-}
-.perm-text.ok {
-  color: var(--el-color-success);
+.big-btn {
+  min-width: 200px;
+  min-height: 48px;
+  font-size: 16px;
   font-weight: 600;
 }
-.perm-text.bad {
-  color: var(--el-color-danger);
-  font-weight: 600;
-}
-.icon-loading {
-  animation: rotating 1.2s linear infinite;
-}
-@keyframes rotating {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-.perm-help-title {
-  font-weight: 600;
-  margin: 12px 0 4px;
-}
-.perm-help ol {
-  padding-left: 20px;
-  margin: 4px 0;
-}
-.perm-help li {
-  margin: 4px 0;
-  color: #606266;
+.ctrl-tip {
+  color: #c0c4cc;
+  font-size: 12px;
 }
 .timer {
-  font-size: 44px;
+  font-size: 40px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: #303133;
   margin-bottom: 6px;
 }
-.rec-state {
-  margin-bottom: 16px;
+.live-now {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
 }
 .rec-controls {
   display: flex;
@@ -559,42 +500,77 @@ onBeforeUnmount(() => {
   color: var(--el-color-danger);
   font-size: 13px;
 }
-.rec-tip {
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px dashed #ebeef5;
-  color: #c0c4cc;
-  font-size: 12px;
-  line-height: 1.6;
+.unsupported {
+  text-align: center;
+  padding: 8px 0;
 }
-/* 实时对话流 */
-.chat-stream {
-  max-height: 340px;
-  overflow: auto;
+
+/* 转写流 */
+.chat-card {
+  margin-bottom: 12px;
+}
+.chat-body {
+  max-height: 56vh;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
+  padding: 4px 2px;
 }
-.chat-line {
+.msg-row {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: 10px;
 }
-.speaker-tag {
+.msg-avatar {
   flex-shrink: 0;
-  padding: 2px 8px;
-  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
   color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  background: #909399;
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.chat-text {
+.msg-main {
+  max-width: calc(100% - 44px);
+}
+.msg-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.msg-speaker {
+  font-size: 13px;
+  font-weight: 600;
+  color: #4f46e5;
+}
+.msg-time {
+  font-size: 11px;
+  color: #b0b3bd;
+}
+.msg-bubble {
+  margin-top: 3px;
+  padding: 10px 14px;
+  border-radius: 4px 14px 14px 14px;
+  background: #f3f4f8;
   color: #303133;
   line-height: 1.7;
   word-break: break-word;
+  font-size: 15px;
+  display: inline-block;
+  max-width: 100%;
+}
+.msg-row.mine .msg-bubble {
+  background: #e8e6f8;
 }
 /* 说话人列表 */
+.speaker-card {
+  margin-bottom: 12px;
+}
 .speaker-list {
   display: flex;
   flex-direction: column;
@@ -640,9 +616,5 @@ onBeforeUnmount(() => {
 .pre-wrap {
   white-space: pre-wrap;
   word-break: break-word;
-}
-.unsupported {
-  text-align: center;
-  padding: 8px 0;
 }
 </style>
